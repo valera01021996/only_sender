@@ -19,8 +19,8 @@ app = Celery(
 app.conf.timezone = "Asia/Tashkent"
 
 app.conf.beat_schedule = {
-    "scan-alerts-every-5-min": {
+    "scan-alerts-every-1-min": {
         "task": "tasks.scan_alerts_and_send_sms",  # используем относительный путь
-        "schedule": crontab(minute="*/5"),  # каждые 5 минут
+        "schedule": crontab(minute="*/1"),  # каждые 1 минут
     },
 }
