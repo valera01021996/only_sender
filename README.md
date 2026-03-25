@@ -1,10 +1,10 @@
 # only_sender
 
-Сервис автоматической отправки SMS-уведомлений по алертам из базы данных. Использует Celery для планирования задач и ModemManager (`mmcli`) для отправки SMS через сотовый модем.
+Сервис автоматической отправки SMS-уведомлений по алертам из базы данных. Использует Celery для планирования задач и ModemManager (`mmcli`) для отправки SMS через физический сотовый модем.
 
 ## Назначение
 
-Проект решает задачу автоматической рассылки SMS-уведомлений. Каждую минуту воркер проверяет таблицу `jobs_alert` в PostgreSQL, забирает новые алерты и отправляет их содержимое по SMS на заданный номер телефона через физический модем.
+Каждую минуту воркер проверяет таблицу `jobs_alert` в PostgreSQL, забирает новые алерты (до 5 штук) и отправляет их содержимое по SMS на заданный номер телефона.
 
 ## Как это работает
 
@@ -15,15 +15,17 @@ Celery Beat (каждую 1 минуту)
 scan_alerts_and_send_sms()
        │
        ▼
-PostgreSQL: SELECT из jobs_alert WHERE status = 'new' (до 5 штук)
+PostgreSQL: SELECT из jobs_alert WHERE status = 'new'
+            ORDER BY created_at LIMIT 5
+            FOR UPDATE SKIP LOCKED
        │
        ▼
 Пометка алертов как 'in_process'
        │
        ▼
 Для каждого алерта:
-  ├─ mmcli --messaging-create-sms  (создание SMS)
-  ├─ mmcli -s <id> --send          (отправка SMS)
+  ├─ mmcli -m 1 --messaging-create-sms=text='...',number='...'
+  ├─ mmcli -s <sms_id> --send
   ├─ Успех  → статус 'sent'
   └─ Ошибка → статус 'error'
 ```
@@ -43,12 +45,14 @@ new → in_process → sent
 
 ```
 only_sender/
-├── celery_app.py      # Конфигурация Celery, расписание задач
-├── tasks.py           # Определение периодической задачи
-├── db.py              # Работа с PostgreSQL (выборка, обновление статусов)
-├── sms.py             # Отправка SMS через ModemManager (mmcli)
-├── requirements.txt   # Python-зависимости
-└── .env               # Переменные окружения (создать вручную)
+├── celery_app.py         # Конфигурация Celery, расписание задач
+├── tasks.py              # Определение периодической задачи
+├── db.py                 # Работа с PostgreSQL (выборка, обновление статусов)
+├── sms.py                # Отправка SMS через ModemManager (mmcli)
+├── __init__.py           # Пустой файл, делает директорию Python-пакетом
+├── requirements.txt      # Python-зависимости
+├── celerybeat-schedule   # Файл состояния Beat (генерируется автоматически)
+└── .env                  # Переменные окружения (создать вручную)
 ```
 
 ## Требования к инфраструктуре
@@ -56,7 +60,7 @@ only_sender/
 - **Python 3.8+**
 - **Redis** — брокер сообщений для Celery
 - **PostgreSQL** — база данных с таблицей `jobs_alert`
-- **ModemManager** — установлен и настроен, сотовый модем подключён
+- **ModemManager** — установлен и настроен, сотовый модем подключён с ID `1`
 - **sudo** — доступ без пароля для команд `mmcli`
 
 ## Установка
@@ -79,9 +83,9 @@ DB_HOST=172.20.10.2
 DB_PORT=5433
 DB_NAME=sms_send
 DB_USER=sms_user
-DB_PASSWORD=123456
+DB_PASSWORD=your_password
 
-RECEIVER=+998909192558
+RECEIVER=+7XXXXXXXXXX
 ```
 
 ### Таблица в БД
@@ -126,8 +130,12 @@ celery -A celery_app worker --beat --loglevel=info
 
 ## Параметры задачи
 
-- **batch_size**: 5 алертов за один запуск
-- **sleep_seconds**: 1 секунда задержки между отправками SMS
-- **modem_id**: `"1"` — идентификатор модема в ModemManager
-- **Расписание**: каждую 1 минуту
-- **Часовой пояс**: `Asia/Tashkent`
+| Параметр       | Значение       | Описание                                      |
+|----------------|----------------|-----------------------------------------------|
+| batch_size     | 5              | Алертов за один запуск                        |
+| sleep_seconds  | 1              | Задержка между отправками SMS (секунды)       |
+| modem_id       | `"1"`          | ID модема в ModemManager (задан в `db.py`)    |
+| Расписание     | каждую минуту  | `crontab(minute="*/1")`                       |
+| Часовой пояс   | Asia/Tashkent  | Задан в `celery_app.py`                       |
+
+> **Примечание:** `modem_id` захардкожен как `"1"` в `db.py`. Если ваш модем имеет другой ID (проверить: `mmcli -L`), измените значение в `db.py:142`.
